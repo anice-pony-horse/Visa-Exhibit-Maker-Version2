@@ -778,7 +778,7 @@ def render_stage_2_upload(navigator: StageNavigator, config: Dict):
                 </style>
                 """, unsafe_allow_html=True)
 
-                col_tb_1, col_tb_2, col_tb_3, col_tb_4, col_tb_5, col_tb_6, col_tb_7 = st.columns([0.15, 0.07, 0.03, 0.03, 0.03, 0.51, 0.2])
+                col_tb_1, col_tb_2, col_tb_3, col_tb_4, col_tb_5, col_tb_6, col_tb_7 = st.columns([0.15, 0.07, 0.03, 0.03, 0.03, 0.41, 0.2])
                 
                 with col_tb_1:
                     # View Toggle
@@ -974,7 +974,7 @@ def render_stage_2_upload(navigator: StageNavigator, config: Dict):
                     card_styles = """
                     <style>
                     /* Outer light-blue card with white inner panel look */
-                    .card-wrapper { background: rgba(47,134,255,0.08); border-radius: 10px; padding: 5px; box-sizing: border-box; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; min-height:300px; height: 410px; position:absolute ; width:217px; margin-top:10px; box-shadow:0 10px 24px rgba(2,6,23,0.06); }
+                    .card-wrapper { background: rgba(47,134,255,0.08); border-radius: 10px; padding: 5px; box-sizing: border-box; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; min-height:300px; height: 450px; position:absolute ; width:217px; margin-top:10px; box-shadow:0 10px 24px rgba(2,6,23,0.06); }
 
                           /* Hide native Streamlit action row (we'll show a styled visual overlay instead) */
                           .card-actions-row { display:none !important }
@@ -992,13 +992,13 @@ def render_stage_2_upload(navigator: StageNavigator, config: Dict):
                     .card-thumb .img-frame { position:absolute; left:0; top:0; right:0; bottom:0; display:flex; align-items:center; justify-content:center; z-index:2; overflow:hidden; background:#fff; border:1px solid #eef2f7 }
                     .card-thumb img { max-width:100%; max-height:100%; object-fit:contain; z-index: 5; margin-left: -20px; }
                     .st-emotion-cache-1j4it34 { flex:none; }
+                    .st-emotion-cache-ai037n { margin-bottom: 12px; }
                     /* Name and pages centered below thumbnail */
-                    .card-name { color:#6b7280; font-size:12px; margin-top:8px; text-align:center; background: rgba(47,134,255,0.12); color:#0b5cff; padding:6px 12px; border-radius:12px; font-weight:600; position: absolute; top: 10px; left: 25px; width: 170px; }
-                    .card-pages { font-weight:400; color:#a3a3a3; margin-top:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:center; position:absolute; left:25%; top:25px; }
+                    .card-name { color:#6b7280; font-size:12px; text-align:center; background: rgba(47,134,255,0.12); color:#0b5cff; padding:6px 12px; border-radius:12px; font-weight:600; position: absolute; top: 10px; left: 25px; width: 170px; }
+                    .card-pages { font-weight:400; color:#a3a3a3; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:center; position:absolute; left:25%; top:25px; }
 
                     /* Ensure action row buttons inside Streamlit columns are compact */
                     .stButton>button { padding:6px 8px }
-
                     @media (max-width:900px) {
                         .card-wrapper { min-height:300px }
                         .card-thumb { width:150px; height:200px }
@@ -1074,7 +1074,7 @@ def render_stage_2_upload(navigator: StageNavigator, config: Dict):
 
                                     try:
                                         st.markdown('<div class="card-wrapper">', unsafe_allow_html=True)
-                                        action_cols = st.columns([0.18, 0.18, 0.18, 0.18, 0.28])
+                                        action_cols = st.columns([0.23, 0.25, 0.25, 0.23, 0.25])
                                         st.markdown('<div class="card-actions-row">', unsafe_allow_html=True)
                                         with action_cols[0]:
                                             if st.button('🔍︎', key=f'view_card_{i}', help='Preview'):
@@ -1150,7 +1150,7 @@ def render_stage_2_upload(navigator: StageNavigator, config: Dict):
 
                                     # Add the large add-slot button
                                     add_slot_html = '''
-                                    <button id="large_add_slot" style="width:210px;height:300px;border-radius:12px;border:2px dashed #3B82F6;background:#eef6ff;display:flex;align-items:center;justify-content:center;color:#3B82F6;font-weight:600;text-align:center;padding:16px;margin-top:8px;">
+                                    <button id="large_add_slot" style="width:210px;height:450px;border-radius:12px;border:2px dashed #3B82F6;background:#eef6ff;display:flex;align-items:center;justify-content:center;color:#3B82F6;font-weight:600;text-align:center;padding:16px; margin-top: 20px">
                                         <div style="text-align:center;">
                                             <div style="width:40px;height:40px;border-radius:20px;border:2px solid #cfe3ff;display:inline-flex;align-items:center;justify-content:center;margin-bottom:12px;background:white;color:#3B82F6;font-size:24px">＋</div>
                                             <div style="color:#1064FF;font-weight:700;margin-top:6px">Add PDF,<br/>image, Word,<br/>Excel, and<br/><strong>PowerPoint</strong><br/>files</div>
