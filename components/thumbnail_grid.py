@@ -15,6 +15,7 @@ Features:
 import streamlit as st
 import base64
 from io import BytesIO
+import io
 from typing import List, Dict, Any, Optional
 import os
 import logging
@@ -109,8 +110,16 @@ def generate_thumbnail(
                 )
 
             if images:
+                # Apply rotation if requested
+                img = images[0]
+                if rotation and rotation % 360 != 0:
+                    try:
+                        img = img.rotate(-rotation, expand=True)
+                    except Exception:
+                        pass
+
                 buffered = BytesIO()
-                images[0].save(buffered, format="JPEG", quality=70)
+                img.save(buffered, format="JPEG", quality=70)
                 return base64.b64encode(buffered.getvalue()).decode()
 
         except Exception as e:
@@ -389,6 +398,7 @@ def render_thumbnail_grid(
                 </div>
                 <div class="exhibit-pages">{pages} pages</div>
                 <div class="drag-handle"></div>
+                <div class="exhibit-actions" style="display:none"></div>
             </div>
             """
 
@@ -396,7 +406,8 @@ def render_thumbnail_grid(
 
             # Action buttons (using Streamlit buttons for interactivity)
             if show_actions:
-                action_cols = st.columns(4)
+                # Add the '+' control as part of the action buttons (moved from right edge)
+                action_cols = st.columns(5)
 
                 with action_cols[0]:
                     if st.button("👁️", key=f"view_{i}", help="View"):
@@ -419,38 +430,180 @@ def render_thumbnail_grid(
                             exhibits.pop(i)
                             st.rerun()
 
+                with action_cols[4]:
+                    # The '+' insert button is now next to other actions
+                    if st.button("+", key=f"add_{i}", help="Insert"):
+                        # Default behavior: insert a shallow copy after this item
+                        exhibits.insert(i + 1, exhibit.copy())
+                        st.rerun()
+
     return exhibits
 
 
-def render_exhibit_preview(exhibit: Dict[str, Any]):
+def render_exhibit_preview(exhibit: Dict[str, Any], index: Optional[int] = None):
     """Render full preview modal for an exhibit."""
-    st.markdown("### Preview")
-    st.markdown(f"**{exhibit.get('name', 'Document')}**")
+    # st.markdown("### Preview")
+    # st.markdown(f"**{exhibit.get('name', 'Document')}**")
 
-    if exhibit.get("path") and os.path.exists(exhibit["path"]):
-        with open(exhibit["path"], "rb") as f:
-            pdf_bytes = f.read()
-            st.download_button(
-                "Download PDF",
-                pdf_bytes,
-                file_name=exhibit.get("filename", "document.pdf"),
-                mime="application/pdf"
-            )
+    # Prefer in-memory bytes if available (uploaded files)
+    pdf_bytes = None
+    if exhibit.get('content'):
+        try:
+            pdf_bytes = exhibit.get('content')
+            if isinstance(pdf_bytes, str):
+                # If accidentally stored as base64 string, try to decode
+                import base64
+                try:
+                    pdf_bytes = base64.b64decode(pdf_bytes)
+                except Exception:
+                    pdf_bytes = None
+        except Exception:
+            pdf_bytes = None
 
-    # Show thumbnail larger
-    thumbnail = exhibit.get("thumbnail")
-    if thumbnail:
-        if thumbnail.startswith("PHN2"):
-            st.markdown(f'<img src="data:image/svg+xml;base64,{thumbnail}" width="300">', unsafe_allow_html=True)
+    # If no bytes, try path
+    if pdf_bytes is None and exhibit.get('path') and os.path.exists(exhibit['path']):
+        try:
+            with open(exhibit['path'], 'rb') as f:
+                pdf_bytes = f.read()
+        except Exception:
+            pdf_bytes = None
+
+    # Show interactive preview (page navigation) when we have PDF bytes
+    if pdf_bytes:
+        # Determine total pages
+        total_pages = exhibit.get('page_count') or exhibit.get('pages')
+        try:
+            total_pages = int(total_pages)
+        except Exception:
+            # Attempt to detect using PyPDF2
+            try:
+                from PyPDF2 import PdfReader
+                total_pages = len(PdfReader(io.BytesIO(pdf_bytes)).pages)
+            except Exception:
+                total_pages = None
+
+        # Session keys for current page and rotation
+        page_key = None
+        rot_key = None
+        if index is not None:
+            page_key = f"preview_page_{index}"
+            rot_key = f"preview_rotation_{index}"
         else:
-            st.markdown(f'<img src="data:image/jpeg;base64,{thumbnail}" width="300">', unsafe_allow_html=True)
+            # Fallback to filename-based keys
+            safe_name = exhibit.get('filename') or exhibit.get('name') or 'preview'
+            safe_name = ''.join(c if c.isalnum() else '_' for c in safe_name)
+            page_key = f"preview_page_{safe_name}"
+            rot_key = f"preview_rotation_{safe_name}"
 
-    # Exhibit info
-    st.markdown(f"""
-    - **Pages:** {exhibit.get('page_count', '?')}
-    - **Category:** {exhibit.get('category', 'Unknown')}
-    - **Criterion:** {exhibit.get('criterion_letter', 'N/A')}
-    """)
+        if page_key not in st.session_state:
+            st.session_state[page_key] = 0
+        if rot_key not in st.session_state:
+            st.session_state[rot_key] = 0
+
+        cur_page = int(st.session_state[page_key])
+        rotation = int(st.session_state[rot_key])
+
+        # Render large page image using generate_thumbnail for the current page
+        try:
+            # Swap large render size when rotation is 90/270 so aspect ratio remains correct
+            large_size = (900, 1100) if rotation % 180 == 0 else (1100, 900)
+            large_thumb = generate_thumbnail(pdf_bytes=pdf_bytes, page=cur_page, size=large_size, rotation=rotation)
+        except Exception:
+            large_thumb = None
+
+        if large_thumb:
+            # Choose CSS display dimensions matching the thumbnail orientation
+            if rotation % 180 == 0:
+                css_dims = 'max-width:620px; height:840px;'
+            else:
+                css_dims = 'max-width:840px; height:620px;'
+            if large_thumb.startswith('PHN2'):
+                st.markdown(f'<div style="text-align:center"><img src="data:image/svg+xml;base64,{large_thumb}" style="{css_dims} border:1px solid #eee; border-radius:6px"/></div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div style="text-align:center"><img src="data:image/jpeg;base64,{large_thumb}" style="{css_dims} border:1px solid #eee; border-radius:6px"/></div>', unsafe_allow_html=True)
+        else:
+            # Fallback to iframe embedding of full PDF
+            try:
+                import base64
+                b64 = base64.b64encode(pdf_bytes).decode('ascii')
+                pdf_data_uri = f"data:application/pdf;base64,{b64}"
+                iframe_html = f'<iframe src="{pdf_data_uri}#page={cur_page+1}" width="100%" height="720" style="border:1px solid #ddd;border-radius:6px"></iframe>'
+                try:
+                    from streamlit.components.v1 import html as st_html
+                    st_html(iframe_html, height=720)
+                except Exception:
+                    st.markdown(iframe_html, unsafe_allow_html=True)
+            except Exception:
+                st.info('Unable to render preview for this PDF.')
+        st.markdown('<div style="text-align:center;">', unsafe_allow_html=True)
+        # Controls: center the button group beneath the preview
+        outer = st.columns([2, 2, 2])
+        with outer[1]:
+            # inner columns for each button, grouped and centered by the outer columns
+            btn_cols = st.columns([0.12, 0.12, 0.12, 0.12, 0.12])
+            with btn_cols[0]:
+                if st.button('◀ Prev'):
+                    st.session_state[page_key] = max(0, cur_page - 1)
+                    st.rerun()
+            with btn_cols[1]:
+                page_label = f"Page {cur_page + 1}" + (f" / {total_pages}" if total_pages else '')
+                st.write(page_label)
+            with btn_cols[2]:
+                if st.button('Next ▶'):
+                    if total_pages is None:
+                        st.session_state[page_key] = cur_page + 1
+                    else:
+                        st.session_state[page_key] = min(total_pages - 1, cur_page + 1)
+                    st.rerun()
+            with btn_cols[3]:
+                if st.button('↻ Rotate'):
+                    # Update rotation in session and, if possible, the uploaded_meta
+                    st.session_state[rot_key] = (rotation + 90) % 360
+                    try:
+                        if index is not None and 'uploaded_meta' in st.session_state and 0 <= index < len(st.session_state.uploaded_meta):
+                            st.session_state.uploaded_meta[index]['rotation'] = st.session_state[rot_key]
+                            try:
+                                f_obj = st.session_state.uploaded_files[index]
+                                f_obj.seek(0)
+                                content = f_obj.read()
+                                f_obj.seek(0)
+                                rot_k = int(st.session_state.get(rot_key, 0) or 0)
+                                thumb_size_k = (180, 240) if rot_k % 180 == 0 else (240, 180)
+                                new_thumb = generate_thumbnail(pdf_bytes=content, page=0, size=thumb_size_k, rotation=rot_k)
+                                if new_thumb:
+                                    st.session_state.uploaded_meta[index]['thumb'] = new_thumb
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    st.rerun()
+            with btn_cols[4]:
+                if st.button('🗑️ Delete'):
+                    # Remove from uploaded lists if index provided
+                    if index is not None and 'uploaded_files' in st.session_state and 0 <= index < len(st.session_state.uploaded_files):
+                        try:
+                            st.session_state.uploaded_files.pop(index)
+                            st.session_state.uploaded_meta.pop(index)
+                        except Exception:
+                            pass
+                    try:
+                        if 'preview_file_index' in st.session_state and st.session_state.preview_file_index == index:
+                            st.session_state.preview_file_index = None
+                    except Exception:
+                        pass
+                    st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    else:
+        # No PDF bytes available - show thumbnail and basic info
+        thumbnail = exhibit.get('thumbnail')
+        if thumbnail:
+            if isinstance(thumbnail, str) and thumbnail.startswith('PHN2'):
+                st.markdown(f'<img src="data:image/svg+xml;base64,{thumbnail}" width="300">', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<img src="data:image/jpeg;base64,{thumbnail}" width="300">', unsafe_allow_html=True)
+        else:
+            st.info('No preview available for this document.')
 
 
 def render_compact_list(

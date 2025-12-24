@@ -28,6 +28,7 @@ from typing import List, Dict, Optional, Any
 import zipfile
 from datetime import datetime
 import shutil
+import hashlib
 
 # Import our modules
 from pdf_handler import PDFHandler
@@ -165,49 +166,159 @@ def init_session_state():
             st.session_state[key] = value
 
 def delete_file(idx):
-    print("🎀🎀🎀")
-    if 0 <= idx < len(st.session_state.uploaded_files):
-        st.session_state.uploaded_files.pop(idx)
-        if idx < len(st.session_state.uploaded_meta):
-            st.session_state.uploaded_meta.pop(idx)
-        # Adjust preview index if necessary
-        if st.session_state.get('preview_file_index') == idx:
-            st.session_state.preview_file_index = None
-        elif st.session_state.get('preview_file_index', -1) > idx:
-            st.session_state.preview_file_index -= 1
+    uploaded_files = st.session_state.get('uploaded_files', [])
+    uploaded_meta = st.session_state.get('uploaded_meta', [])
+    # Validate index
+    if not isinstance(idx, int):
+        return
+    if 0 <= idx < len(uploaded_files):
+        # Remove file
+        try:
+            uploaded_files.pop(idx)
+        except Exception:
+            pass
+        # Remove meta if present
+        if 0 <= idx < len(uploaded_meta):
+            try:
+                uploaded_meta.pop(idx)
+            except Exception:
+                pass
+
+        # Save back
+        st.session_state.uploaded_files = uploaded_files
+        st.session_state.uploaded_meta = uploaded_meta
+
+        # Adjust preview index if necessary (handle None)
+        preview_idx = st.session_state.get('preview_file_index')
+        if preview_idx is None:
+            # nothing to do
+            pass
+        else:
+            try:
+                if preview_idx == idx:
+                    st.session_state.preview_file_index = None
+                elif isinstance(preview_idx, int) and preview_idx > idx:
+                    st.session_state.preview_file_index = preview_idx - 1
+            except Exception:
+                st.session_state.preview_file_index = None
+
+        # Adjust selected index if present
+        sel = st.session_state.get('selected_upload_index')
+        if isinstance(sel, int):
+            if sel == idx:
+                st.session_state.selected_upload_index = None
+            elif sel > idx:
+                st.session_state.selected_upload_index = max(0, sel - 1)
+
         st.rerun()
 
 def rotate_file(idx):
-    print("🎀🎀🎀")
     if 0 <= idx < len(st.session_state.uploaded_meta):
         meta = st.session_state.uploaded_meta[idx]
         current_rotation = meta.get('rotation', 0)
         meta['rotation'] = (current_rotation + 90) % 360
-        st.rerun()
+        # Try to regenerate thumbnail for this file to reflect rotation
+        try:
+            uploaded_files = st.session_state.get('uploaded_files', [])
+            if 0 <= idx < len(uploaded_files):
+                f = uploaded_files[idx]
+                # Read bytes
+                f.seek(0)
+                content = f.read()
+                f.seek(0)
+                try:
+                    # Use existing generate_thumbnail helper to update this file's thumbnail
+                    rot = int(meta.get('rotation', 0) or 0)
+                    thumb_size = (180, 240) if rot % 180 == 0 else (240, 180)
+                    new_thumb = generate_thumbnail(pdf_bytes=content, page=0, size=thumb_size, rotation=rot)
+                    if new_thumb:
+                        meta['thumb'] = new_thumb
+                        st.session_state.uploaded_meta = st.session_state.get('uploaded_meta', [])
+                        st.rerun()
+                except Exception:
+                    # Ignore thumbnail/render errors for this single file
+                    pass
+        except Exception:
+            pass
 
 def duplicate_file(idx):
-    print("🎀🎀🎀")
-    if 0 <= idx < len(st.session_state.uploaded_files):
-        original_file = st.session_state.uploaded_files[idx]
-        original_meta = st.session_state.uploaded_meta[idx] if idx < len(st.session_state.uploaded_meta) else {}
-        
-        # Create a copy of the file in memory
-        original_file.seek(0)
-        content = original_file.read()
-        original_file.seek(0) # Reset pointer
-        
-        new_file = io.BytesIO(content)
-        new_file.name = f"{original_file.name}"
-        new_file.size = len(content)
-        
-        # Copy metadata
-        new_meta = original_meta.copy()
-        new_meta['name'] = new_file.name
-        
-        # Insert after the original
-        st.session_state.uploaded_files.insert(idx + 1, new_file)
-        st.session_state.uploaded_meta.insert(idx + 1, new_meta)
+    """Duplicate an uploaded file in-session and insert the copy after the original."""
+    try:
+        uploaded = st.session_state.get('uploaded_files', []) or []
+        meta = st.session_state.get('uploaded_meta', []) or []
+
+        if not isinstance(idx, int):
+            return
+        if not (0 <= idx < len(uploaded)):
+            return
+
+        src = uploaded[idx]
+        # Read bytes to make a stable copy
+        content = None
+        try:
+            src.seek(0)
+            content = src.read()
+            src.seek(0)
+        except Exception:
+            content = None
+
+        if content is not None:
+            buf = io.BytesIO(content)
+            buf.name = getattr(src, 'name', f'copy_{idx}')
+            try:
+                buf.size = len(content)
+            except Exception:
+                pass
+        else:
+            # Fallback to shallow copy
+            buf = src
+
+        # Duplicate metadata if present
+        if 0 <= idx < len(meta):
+            new_meta = dict(meta[idx])
+            orig_name = new_meta.get('name') or getattr(src, 'name', None) or f'Document {idx+1}'
+            new_meta['name'] = f"{orig_name} (copy)"
+            new_meta['rotation'] = new_meta.get('rotation', 0)
+        else:
+            new_meta = {'name': getattr(buf, 'name', f'Document {idx+1} (copy)'), 'rotation': 0, 'pages': '', 'thumb': None}
+
+        # Attempt to generate a thumbnail for the copy
+        try:
+            rot_nm = int(new_meta.get('rotation', 0) or 0)
+            size_nm = (180, 240) if rot_nm % 180 == 0 else (240, 180)
+            if content is not None:
+                thumb = generate_thumbnail(pdf_bytes=content, page=0, size=size_nm, rotation=rot_nm)
+                if thumb:
+                    new_meta['thumb'] = thumb
+        except Exception:
+            pass
+
+        insert_at = idx + 1
+        uploaded.insert(insert_at, buf)
+        meta.insert(insert_at, new_meta)
+
+        st.session_state.uploaded_files = uploaded
+        st.session_state.uploaded_meta = meta
+
+        # Focus the duplicated item
+        st.session_state.selected_upload_index = insert_at
+        st.session_state.preview_file_index = insert_at
+
+        # Clear dynamic keys to avoid widget collisions
+        dynamic_prefixes = (
+            'preview_', 'move_mode_', 'view_card_', 'dup_card_', 'del_card_',
+            'insert_here_', 'insert_files_', 'list_del_'
+        )
+        keys_to_clear = [k for k in list(st.session_state.keys()) if any(k.startswith(p) for p in dynamic_prefixes)]
+        for k in keys_to_clear:
+            try:
+                st.session_state.pop(k, None)
+            except Exception:
+                pass
+
         st.rerun()
+    except Exception:
+        return
 
 
 def process_bridge_command():
@@ -567,12 +678,15 @@ def render_stage_2_upload(navigator: StageNavigator, config: Dict):
                             f.seek(0)
                             reader = PdfReader(f)
                             pages = len(reader.pages)
-                            # Generate thumbnail preview
+                            # Generate thumbnail preview (respect rotation)
                             f.seek(0)
                             content = f.read()
                             f.seek(0)
                             try:
-                                thumb_b64 = generate_thumbnail(pdf_bytes=content, page=0, size=(180, 240))
+                                rot0 = 0
+                                thumb_size0 = (180, 240)
+                                # no per-file rotation stored yet; default to 0
+                                thumb_b64 = generate_thumbnail(pdf_bytes=content, page=0, size=thumb_size0)
                             except Exception:
                                 thumb_b64 = None
                             f.seek(0)
@@ -612,7 +726,7 @@ def render_stage_2_upload(navigator: StageNavigator, config: Dict):
                                 'content': content,
                                 'filename': meta[idx].get('name')
                             }
-                            render_exhibit_preview(exhibit_data)
+                            render_exhibit_preview(exhibit_data, idx)
                             st.divider()
                 
                 # --- View Mode Toggle ---
@@ -664,7 +778,7 @@ def render_stage_2_upload(navigator: StageNavigator, config: Dict):
                 </style>
                 """, unsafe_allow_html=True)
 
-                col_tb_1, col_tb_2, col_tb_3, col_tb_4, col_tb_5, col_tb_6, col_tb_7 = st.columns([0.22, 0.12, 0.08, 0.08, 0.08, 0.27, 0.15])
+                col_tb_1, col_tb_2, col_tb_3, col_tb_4, col_tb_5, col_tb_6, col_tb_7 = st.columns([0.15, 0.07, 0.03, 0.03, 0.03, 0.51, 0.2])
                 
                 with col_tb_1:
                     # View Toggle
@@ -718,44 +832,117 @@ def render_stage_2_upload(navigator: StageNavigator, config: Dict):
                             ["Name, A-Z", "Name, Z-A"],
                             key="sort_files_radio",
                         )
-                        
-                        if files and meta and len(files) == len(meta):
-                            # Sort logic
-                            zipped = list(zip(files, meta))
-                            reverse = (sort_order == "Name, Z-A")
-                            
-                            # Sort by name
-                            zipped.sort(key=lambda x: x[1].get('name', '').lower(), reverse=reverse)
-                            
-                            sorted_files, sorted_meta = zip(*zipped)
-                            # Convert back to list and check if order changed to avoid unnecessary reruns
-                            new_files = list(sorted_files)
-                            new_meta = list(sorted_meta)
-                            
-                            # Only update if changed
-                            current_names = [m.get('name') for m in meta]
-                            new_names = [m.get('name') for m in new_meta]
-                            
-                            if current_names != new_names:
-                                st.session_state.uploaded_files = new_files
-                                st.session_state.uploaded_meta = new_meta
-                                st.rerun()
+                        if st.button("Apply", key="apply_sort_btn_toolbar"):
+                            if files and meta and len(files) == len(meta):
+                                reverse = (sort_order == "Name, Z-A")
+
+                                # Build list of (orig_index, file_obj, meta_obj)
+                                orig_items = [(i, f, m) for i, (f, m) in enumerate(zip(files, meta))]
+                                sorted_items = sorted(orig_items, key=lambda x: (x[2].get('name') or '').lower(), reverse=reverse)
+
+                                new_files = [item[1] for item in sorted_items]
+                                new_meta = [item[2] for item in sorted_items]
+                                perm = [item[0] for item in sorted_items]
+
+                                # Only update if the order actually changed
+                                current_names = [m.get('name') for m in meta]
+                                new_names = [m.get('name') for m in new_meta]
+                                if current_names != new_names:
+                                    st.session_state.uploaded_files = new_files
+                                    st.session_state.uploaded_meta = new_meta
+
+                                    related_keys = ['exhibit_order', 'processed_files', 'exhibit_list']
+                                    for k in related_keys:
+                                        if k in st.session_state:
+                                            try:
+                                                old_list = list(st.session_state.get(k) or [])
+                                                if len(old_list) == len(perm):
+                                                    st.session_state[k] = [old_list[idx] for idx in perm]
+                                            except Exception:
+                                                pass
+
+                                    def map_old_to_new(old_idx):
+                                        for new_pos, orig_idx in enumerate(perm):
+                                            if orig_idx == old_idx:
+                                                return new_pos
+                                        return None
+
+                                    for sel_key in ('selected_upload_index', 'preview_file_index'):
+                                        if sel_key in st.session_state and st.session_state.get(sel_key) is not None:
+                                            try:
+                                                old_sel = int(st.session_state.get(sel_key))
+                                                new_sel = map_old_to_new(old_sel)
+                                                if new_sel is not None:
+                                                    st.session_state[sel_key] = new_sel
+                                                else:
+                                                    st.session_state.pop(sel_key, None)
+                                            except Exception:
+                                                st.session_state.pop(sel_key, None)
+
+                                    dynamic_prefixes = (
+                                        'preview_', 'move_mode_', 'view_card_', 'dup_card_', 'del_card_',
+                                        'insert_here_', 'insert_files_', 'list_del_'
+                                    )
+                                    keys_to_clear = [k for k in list(st.session_state.keys()) if any(k.startswith(p) for p in dynamic_prefixes)]
+                                    for k in keys_to_clear:
+                                        try:
+                                            st.session_state.pop(k, None)
+                                        except Exception:
+                                            pass
+
+                                    st.rerun()
 
                 with col_tb_4:
-                     if st.button("↺", help="Rotate Left", disabled=False, key="btn_rotate_left"):
-                         if meta:
-                             for m in meta:
-                                 m['rotation'] = (m.get('rotation', 0) - 90) % 360
-                             st.session_state.uploaded_meta = meta
-                             st.rerun()
+                    if st.button("↺", help="Rotate Left", disabled=False, key="btn_rotate_left"):
+                        if meta:
+                            uploaded_files = st.session_state.get('uploaded_files', [])
+                            for i, m in enumerate(meta):
+                                m['rotation'] = (m.get('rotation', 0) - 90) % 360
+                                # Regenerate thumbnail to reflect rotation if file bytes available
+                                try:
+                                    if 0 <= i < len(uploaded_files):
+                                        f = uploaded_files[i]
+                                        f.seek(0)
+                                        content = f.read()
+                                        f.seek(0)
+                                        try:
+                                            rot_local = int(m.get('rotation', 0) or 0)
+                                            thumb_size_local = (180, 240) if rot_local % 180 == 0 else (240, 180)
+                                            new_thumb = generate_thumbnail(pdf_bytes=content, page=0, size=thumb_size_local, rotation=rot_local)
+                                            if new_thumb:
+                                                m['thumb'] = new_thumb
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+                            st.session_state.uploaded_meta = meta
+                            st.rerun()
 
                 with col_tb_5:
-                     if st.button("↻", help="Rotate Right", disabled=False, key="btn_rotate_right"):
-                         if meta:
-                             for m in meta:
-                                 m['rotation'] = (m.get('rotation', 0) + 90) % 360
-                             st.session_state.uploaded_meta = meta
-                             st.rerun()
+                    if st.button("↻", help="Rotate Right", disabled=False, key="btn_rotate_right"):
+                        if meta:
+                            uploaded_files = st.session_state.get('uploaded_files', [])
+                            for i, m in enumerate(meta):
+                                m['rotation'] = (m.get('rotation', 0) + 90) % 360
+                                # Regenerate thumbnail to reflect rotation if file bytes available
+                                try:
+                                    if 0 <= i < len(uploaded_files):
+                                        f = uploaded_files[i]
+                                        f.seek(0)
+                                        content = f.read()
+                                        f.seek(0)
+                                        try:
+                                            rot_local = int(m.get('rotation', 0) or 0)
+                                            thumb_size_local = (180, 240) if rot_local % 180 == 0 else (240, 180)
+                                            new_thumb = generate_thumbnail(pdf_bytes=content, page=0, size=thumb_size_local, rotation=rot_local)
+                                            if new_thumb:
+                                                m['thumb'] = new_thumb
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+                            st.session_state.uploaded_meta = meta
+                            st.rerun()
 
                 with col_tb_7:
                     if st.button("Done →", type="primary", use_container_width=True):
@@ -776,285 +963,299 @@ def render_stage_2_upload(navigator: StageNavigator, config: Dict):
                     
                     is_landscape = (first_rotation % 180 != 0)
                     
-                    # Dimensions based on orientation
-                    if is_landscape:
-                        stack_w, stack_h, stack_mt, action_t, action_r = 202, 156, 35, -47, -8
-                        card_w = 238  # 202 + 36 padding
-                    else:
-                        stack_w, stack_h, stack_mt, action_t, action_r = 156, 202, 12, -25, -30
-                        card_w = 192
 
 
 
-                    row_html = ['<div class="cards-row">']
-                    for i in range(n):
-                        m = meta[i]
-                        name = m.get('name')
-                        pages = f"{m.get('pages')} pages" if m.get('pages') else ''
-                        
-                        ext = (name.split('.')[-1].lower() if name and '.' in name else 'pdf')
-                        pill_bg = '#fde8ea' if ext == 'pdf' else '#fdecc8'
-                        pill_fg = '#b91c1c' if ext == 'pdf' else '#8a6a00'
-                        display_name = f"{name[:22]}{'...' if len(name)>22 else ''}" if name else ''
-                        thumb_b64 = m.get('thumb')
-                        rotation = m.get('rotation', 0)
-                        
-                        # Calculate image style for rotation
-                        if is_landscape:
-                            # Image is portrait (156x202) but container is landscape (202x156)
-                            # We need to center and rotate it
-                            # Unrotated center: (78, 101). Container center: (101, 78).
-                            # Left offset: 101 - 78 = 23. Top offset: 78 - 101 = -23.
-                            img_style = f"width: {stack_h}px; height: {stack_w}px; transform: rotate({rotation}deg); position: absolute; left: 23px; top: -23px; transition: transform 0.3s ease;"
-                        else:
-                            img_style = f"width: 100%; height: 100%; transform: rotate({rotation}deg); transition: transform 0.3s ease;"
+                    # Render a Streamlit-native card grid using columns so action buttons are server-side
+                    cols_per_row = 6
+                    cols_cards = [st.columns(cols_per_row) for _ in range(1)][0]
 
-                        thumb_inner = (
-                            f'<img src="data:image/jpeg;base64,{thumb_b64}" style="{img_style}" />'
-                            if thumb_b64 else '<strong>EXHIBIT</strong>'
-                        )
-                        card = f"""
-                        <div class="card">
-                            <div class="stack">
-                                 <div class="actions-pane">
-                                    <a class="act" href="javascript:void(0)" onclick="sendAction('preview', {i})" title="Preview">
-                                        <svg xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 24 24"><path d="M11 10h3v1h-3v3h-1v-3H7v-1h3V7h1zm4.433 4.733L20 19.3l-.7.7-4.567-4.567a6.5 6.5 0 1 1 .7-.7M10.5 16a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11"></path></svg>
-                                    </a>
-                                    <a class="act" href="javascript:void(0)" onclick="sendAction('rotate', {i})" title="Rotate">
-                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"><path fill="currentColor" fill-rule="evenodd" d="M18.238 6.982V4h.89l.005 4.46h-4.461v-.89h2.895a7.1 7.1 0 0 0-5.558-2.678c-3.932 0-7.12 3.196-7.12 7.137a7.13 7.13 0 0 0 3.171 5.94l-.494.742A8.03 8.03 0 0 1 4 12.03C4 7.595 7.586 4 12.009 4a7.99 7.99 0 0 1 6.229 2.982M9.398 18.67c.557.22 1.14.37 1.732.444l-.11.886a8.2 8.2 0 0 1-1.95-.502zm3.52.44a7.2 7.2 0 0 0 1.733-.453l.329.829a7 7 0 0 1-1.947.508zm4.595-2.554.69.565a8 8 0 0 1-1.46 1.389l-.527-.72a7 7 0 0 0 1.297-1.234m1.498-3.23.875.164c-.09.484-.386 1.51-.613 1.92l-.807-.374c.252-.546.436-1.12.545-1.71m.597-3.83a8.5 8.5 0 0 1 .392 1.98l-.887.062a7.4 7.4 0 0 0-.35-1.762z" clip-rule="evenodd"></path></svg>
-                                    </a>
-                                    <a class="act" href="javascript:void(0)" onclick="sendAction('duplicate', {i})" title="Duplicate">
-                                        <svg xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M19.368 4H8.632A.63.63 0 0 0 8 4.632v10.736c0 .35.283.632.632.632h10.736a.63.63 0 0 0 .632-.632V4.632A.63.63 0 0 0 19.368 4M19 15H9V5h10zM5 19v-2H4v2.333c0 .368.299.667.667.667H7v-1zm3 0h4v1H8zm7-2v2h-2v1h2.333a.667.667 0 0 0 .667-.667V17zM4.667 8H7v1H5v2H4V8.667C4 8.299 4.299 8 4.667 8M5 12H4v4h1z" clip-rule="evenodd"></path></svg>
-                                    </a>
-                                    <a class="act" href="javascript:void(0)" onclick="sendAction('delete', {i})" title="Delete" style="color:#ef4444;">
-                                        <svg xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 24 24"><path d="M16 4v2.999L20 7v1l-2.066-.001L17.143 20H6.857L6.066 7.999 4 8V7l4-.001V4zm1 4H7l.737 11h8.526zm-4.5 1v9h-1V9zM10 9v9H9V9zm5 0v9h-1V9zm0-4H9v2h6z"></path></svg>
-                                    </a>
-                                </div>
-                                <div class="page back"></div>
-                                <div class="page front">{thumb_inner}</div>
-                            </div>
-                            <div class="badge" style="background:{pill_bg};color:{pill_fg};">{display_name}</div>
-                            <div class="pages">{pages}</div>
-                        </div>
-                        """
-                        row_html.append(card)
-
-                        # Logic moved to main script at the end
-                        pass
-
-
-                        if i < n - 1:
-                            row_html.append('<div class="plus-dot">+</div>')
-                    
-                    row_html.append("""
-                        <div class="add-slot" id="card-add-files">
-                            <div>
-                                <div class="plus-dot" style="margin: 0 auto 12px auto;">+</div>
-                                Add PDF,<br/>image, Word,<br/>Excel, and<br/><strong>PowerPoint</strong><br/>files
-                            </div>
-                        </div>
-                    """)
-                    row_html.append('</div>')
-                    
-                    # Styles for the card component
-                    styles = f"""
+                    # Inject small card CSS (scoped visually) once
+                    card_styles = """
                     <style>
-                    .cards-row {{ 
-                        display:flex; 
-                        gap:24px; 
-                        align-items:flex-start; 
-                        flex-wrap: wrap;
-                        border-radius:5px; 
-                        box-sizing:border-box;
-                        overflow-x: auto;
-                        font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                        /* Minimal padding to remove empty space */
-                        padding: 4px 16px 16px 16px;
-                    }}
-                    .card {{ 
-                        width:192px; 
-                        min-height: 297px;
-                        border-radius:5px; 
-                        padding:16px; 
-                        position:relative; 
-                        display: flex;
-                        flex-direction: column;
-                        align-items: center;
-                    }}
-                    .card:hover {{
-                        background:#eaf1ff;
-                    }}
-                    .card:hover .actions-pane {{
-                        display: flex;
-                    }}
-                    .stack {{ 
-                        position:relative; 
-                        width:{stack_w}px; 
-                        height:{stack_h}px; 
-                        margin-bottom: 16px;
-                        margin-top: {stack_mt}px;
-                    }}
-                    .page {{ 
-                        position:absolute; 
-                        top:0; left:0; 
-                        width:100%; height:100%; 
-                        background:#fff; 
- 
-                        border:1px solid #e5eaf2; 
-                        border-radius:2px; 
-                        box-shadow:0 2px 5px rgba(0,0,0,0.1);
-                    }}
-                    /* Decorative back page */
-                    .page.back {{ 
-                        transform:translate(-8px, -8px); 
-                        opacity:1;
-                        z-index: 1;
-                    }}
-                    
-                    .page.front {{ 
-                        display:flex; 
-                        align-items:center; 
-                        justify-content:center; 
-                        overflow:hidden; 
-                        z-index: 2;
-                    }}
-                    .page.front img {{ width:100%; height:100%; object-fit:contain; }}
-                    
-                    .actions-pane {{ 
-                        position:absolute; 
-                        top:{action_t}px; 
-                        right:{action_r}px; 
-                        background:#fff; 
-                        border:1px solid #e4e9f2; 
-                        border-radius:6px; 
-                        padding:2px; 
-                        display:none; 
-                        gap:2px; 
-                        box-shadow:0 2px 8px rgba(0,0,0,0.08);
-                        z-index: 10;
-                    }}
-                    
-                    .act {{ 
-                        width:30px; 
-                        height:30px; 
-                        display:flex; 
-                        align-items:center; 
-                        justify-content:center; 
-                        font-size:14px; 
-                        color:#334155; 
-                        border-radius:4px; 
-                        cursor: pointer;
-                        text-decoration: none;
-                    }}
-                    .act:hover {{ background: #f1f5f9; }}
-                    
-                    .badge {{ 
-                        display:inline-block; 
-                        padding:4px 12px; 
-                        border-radius:12px; 
-                        font-weight:600; 
-                        font-size:12px; 
-                        max-width:180px; 
-                        overflow:hidden; 
-                        text-overflow:ellipsis; 
-                        white-space:nowrap; 
-                        margin-bottom: 4px;
-                        position: absolute;
-                        bottom: 55px;
-                    }}
-                    .pages {{ 
-                        font-size:14px; 
-                        color:#a3a3a3; 
-                        text-align:center; 
-                        font-weight:500;
-                        position: absolute;
-                        bottom: 35px;
-                    }}
-                    .plus-dot {{ width:34px; height:34px; border-radius:50%; background:#cfe3ff; color:#fff; display:flex; align-items:center; justify-content:center; font-size:20px; align-self:center; }}
-                    .add-slot {{ 
-                        width:210px; 
-                        height:300px; 
-                        border-radius:12px; 
-                        border:2px dotted #3B82F6; 
-                        background:#eef6ff; 
-                        display:flex; 
-                        align-items:center; 
-                        justify-content:center; 
-                        color:#3B82F6; 
-                        font-weight:600; 
-                        text-align:center; 
-                        padding: 16px;
-                    }}
+                    /* Outer light-blue card with white inner panel look */
+                    .card-wrapper { background: rgba(47,134,255,0.08); border-radius: 10px; padding: 5px; box-sizing: border-box; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; min-height:300px; height: 410px; position:absolute ; width:217px; margin-top:10px; box-shadow:0 10px 24px rgba(2,6,23,0.06); }
+
+                          /* Hide native Streamlit action row (we'll show a styled visual overlay instead) */
+                          .card-actions-row { display:none !important }
+
+                          /* Visual overlay actions (purely decorative) - placed at top center */
+                          .visual-actions { position:absolute; top:10px; left:50%; transform:translateX(-50%); display:flex; gap:8px; align-items:center; z-index:30 }
+                          .visual-actions .action-circle { width:36px; height:36px; border-radius:50%; background:white; display:flex; align-items:center; justify-content:center; box-shadow:0 6px 16px rgba(2,6,23,0.06); border:1px solid rgba(2,6,23,0.04); font-size:15px }
+                          .visual-actions .action-circle.delete { color:#ef4444 }
+
+                          /* Right-side floating plus visual */
+                          .plus-visual { position:absolute; right:14px; top:50%; transform:translateY(-50%); width:44px; height:44px; border-radius:50%; background:#2f86ff; color:white; display:flex; align-items:center; justify-content:center; box-shadow:0 10px 24px rgba(47,134,255,0.18); font-size:20px; z-index:30 }
+
+                    /* Thumbnail area: create a stacked/card-on-card layered look */
+                    .card-thumb { width:188px; height:245px; display:flex; margin-left:38px; border-radius:8px; position:relative; margin-top:-30px }
+                    .card-thumb .img-frame { position:absolute; left:0; top:0; right:0; bottom:0; display:flex; align-items:center; justify-content:center; z-index:2; overflow:hidden; background:#fff; border:1px solid #eef2f7 }
+                    .card-thumb img { max-width:100%; max-height:100%; object-fit:contain; z-index: 5; margin-left: -20px; }
+                    .st-emotion-cache-1j4it34 { flex:none; }
+                    /* Name and pages centered below thumbnail */
+                    .card-name { color:#6b7280; font-size:12px; margin-top:8px; text-align:center; background: rgba(47,134,255,0.12); color:#0b5cff; padding:6px 12px; border-radius:12px; font-weight:600; position: absolute; top: 10px; left: 25px; width: 170px; }
+                    .card-pages { font-weight:400; color:#a3a3a3; margin-top:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:center; position:absolute; left:25%; top:25px; }
+
+                    /* Ensure action row buttons inside Streamlit columns are compact */
+                    .stButton>button { padding:6px 8px }
+
+                    @media (max-width:900px) {
+                        .card-wrapper { min-height:300px }
+                        .card-thumb { width:150px; height:200px }
+                    }
                     </style>
                     """
-                    
-                    script = """
-                    <script>
-                        // Add file click handler
-                        const card = document.getElementById('card-add-files');
-                        const input = window.parent.document.querySelector('input[type="file"]');
-                        if (card && input) {
-                            card.addEventListener('click', () => {
-                                input.click();
-                            });
-                            card.style.cursor = 'pointer';
-                        }
+                    st.markdown(card_styles, unsafe_allow_html=True)
 
-                        // Bridge function to communicate with Streamlit
-                        // Define it on window to ensure global access
-                        window.sendAction = function(action, id) {
-                            try {
-                                const value = action + ":" + id;
-                                console.log("Sending action:", value);
-                                
-                                // Try multiple selectors to find the input
-                                let bridgeInput = window.parent.document.querySelector('input[placeholder="bridge_connector_v2"]');
-                                if (!bridgeInput) {
-                                    // Fallback: Try finding by aria-label
-                                    bridgeInput = window.parent.document.querySelector('input[aria-label="internal_action_bridge"]');
-                                }
-                                
-                                if (!bridgeInput) {
-                                    const allInputs = window.parent.document.querySelectorAll('input[type="text"]');
-                                    for (let inp of allInputs) {
-                                        if (inp.getAttribute('aria-label') === 'internal_action_bridge') {
-                                            bridgeInput = inp;
-                                            break;
-                                        }
-                                    }
-                                }
+                    # Start horizontal scroll wrapper for cards
+                    # Check if there's a short-lived insert preview to render at the insertion slot
+                    insert_preview = st.session_state.get('last_insert_preview')
 
-                                if (bridgeInput) {
-                                    // Set value using native setter to bypass React/Streamlit overrides
-                                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-                                    nativeInputValueSetter.call(bridgeInput, value);
-                                    
-                                    // Dispatch input event to trigger Streamlit update
-                                    bridgeInput.dispatchEvent(new Event('input', { bubbles: true }));
-                                    
-                                    // FORCE COMMIT: Simulate Enter key and Blur to ensure Streamlit picks up the change
-                                    bridgeInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, keyCode: 13 }));
-                                    bridgeInput.dispatchEvent(new Event('change', { bubbles: true }));
-                                    bridgeInput.dispatchEvent(new Event('blur', { bubbles: true }));
-                                    
-                                    // Visual feedback in the card itself
-                                    const btn = event.currentTarget;
-                                    if(btn) {
-                                        btn.innerHTML = '...';
-                                        btn.style.pointerEvents = 'none';
-                                    }
-                                } else {
-                                    console.error("Bridge input not found!");
-                                    alert("Connection Error: internal_action_bridge input missing. Please contact support.");
-                                }
-                            } catch (e) {
-                                console.error("Bridge Error:", e);
-                                alert("Error executing action: " + e.message);
-                            }
-                        }
-                    </script>
-                    """
-                    components.html(styles + "\n".join(row_html) + script, height=320)
+                    # Render cards row-by-row so the add-slot can be placed immediately after the last card
+                    rows = (n + cols_per_row - 1) // cols_per_row if n > 0 else 1
+                    rendered_count = 0
+                    for r in range(rows):
+                        row_cols = st.columns(cols_per_row)
+                        for c in range(cols_per_row):
+                            i = r * cols_per_row + c
+                            with row_cols[c]:
+                                # If preview exists and its position matches current index, render the preview cards first
+                                if insert_preview and insert_preview.get('pos') == i:
+                                    for j, (pth, pname) in enumerate(zip(insert_preview.get('thumbs', []), insert_preview.get('names', []))):
+                                        try:
+                                            st.markdown('<div class="card-wrapper">', unsafe_allow_html=True)
+                                            if pth:
+                                                if isinstance(pth, str) and pth.startswith('PHN2'):
+                                                    st.markdown(f'<div class="card-thumb"><img src="data:image/svg+xml;base64,{pth}"/></div>', unsafe_allow_html=True)
+                                                else:
+                                                    st.markdown(f'<div class="card-thumb"><img src="data:image/jpeg;base64,{pth}"/></div>', unsafe_allow_html=True)
+                                            else:
+                                                st.markdown('<div class="card-thumb">PDF PREVIEW</div>', unsafe_allow_html=True)
+                                            st.markdown(f'<div class="card-name" title="{pname}">{pname}</div>', unsafe_allow_html=True)
+                                            st.markdown('</div>', unsafe_allow_html=True)
+                                        except Exception:
+                                            pass
+
+                                # If this index corresponds to an existing uploaded file, render its card
+                                if i < n:
+                                    rendered_count += 1
+                                    try:
+                                        m = meta[i]
+                                    except Exception:
+                                        m = {}
+                                    name = m.get('name')
+                                    pages = f"{m.get('pages')} pages" if m.get('pages') else ''
+                                    display_name = f"{name[:20]}{'...' if name and len(name) > 20 else ''}" if name else f"Document {i+1}"
+                                    thumb_b64 = m.get('thumb')
+
+                                    # If thumbnail missing, try generating it from uploaded file bytes
+                                    if not thumb_b64:
+                                        try:
+                                            uploaded_files = st.session_state.get('uploaded_files', [])
+                                            if 0 <= i < len(uploaded_files):
+                                                f_obj = uploaded_files[i]
+                                                try:
+                                                    f_obj.seek(0)
+                                                    content = f_obj.read()
+                                                    f_obj.seek(0)
+                                                    rot_here = int(m.get('rotation', 0) or 0)
+                                                    size_here = (180, 240) if rot_here % 180 == 0 else (240, 180)
+                                                    gen = generate_thumbnail(pdf_bytes=content, page=0, size=size_here, rotation=rot_here)
+                                                    if gen:
+                                                        thumb_b64 = gen
+                                                        m['thumb'] = gen
+                                                        st.session_state.uploaded_meta = st.session_state.get('uploaded_meta', [])
+                                                except Exception:
+                                                    pass
+                                        except Exception:
+                                            pass
+
+                                    rotation = m.get('rotation', 0)
+
+                                    try:
+                                        st.markdown('<div class="card-wrapper">', unsafe_allow_html=True)
+                                        action_cols = st.columns([0.18, 0.18, 0.18, 0.18, 0.28])
+                                        st.markdown('<div class="card-actions-row">', unsafe_allow_html=True)
+                                        with action_cols[0]:
+                                            if st.button('🔍︎', key=f'view_card_{i}', help='Preview'):
+                                                if st.session_state.get('preview_file_index') == i:
+                                                    st.session_state.preview_file_index = None
+                                                else:
+                                                    st.session_state.preview_file_index = i
+                                                st.rerun()
+                                        with action_cols[1]:
+                                            if st.button('↻', key=f'rotate_card_{i}', help='Rotate'):
+                                                rotate_file(i)
+                                        with action_cols[2]:
+                                            if st.button('⿻', key=f'dup_card_{i}', help='Duplicate'):
+                                                duplicate_file(i)
+                                        with action_cols[3]:
+                                            if st.button('🗑', key=f'del_card_{i}', help='Delete'):
+                                                delete_file(i)
+                                        with action_cols[4]:
+                                            if st.button('＋', key=f'insert_here_{i}', help='Insert files here'):
+                                                st.session_state.insert_position = i + 1
+                                                try:
+                                                    uploaded_files_tmp = st.session_state.get('uploaded_files', [])
+                                                    if 0 <= i < len(uploaded_files_tmp):
+                                                        f_obj = uploaded_files_tmp[i]
+                                                        anchor_size = getattr(f_obj, 'size', None)
+                                                        anchor_name = getattr(f_obj, 'name', None)
+                                                        st.session_state.insert_anchor = (anchor_name, anchor_size)
+                                                        st.session_state.insert_anchor_index = i
+                                                    else:
+                                                        st.session_state.insert_anchor = None
+                                                        st.session_state.insert_anchor_index = None
+                                                except Exception:
+                                                    st.session_state.insert_anchor = None
+                                                    st.session_state.insert_anchor_index = None
+
+                                                st.session_state.insert_uploader_key = st.session_state.get('insert_uploader_key', 0) + 1
+                                                st.session_state.open_insert_uploader = True
+                                                st.rerun()
+                                        st.markdown('</div>', unsafe_allow_html=True)
+
+                                        if thumb_b64:
+                                            if isinstance(thumb_b64, str) and thumb_b64.startswith('PHN2'):
+                                                st.markdown(f'<div class="card-thumb"><img src="data:image/svg+xml;base64,{thumb_b64}" alt="{display_name}"/></div>', unsafe_allow_html=True)
+                                            else:
+                                                st.markdown(f'<div class="card-thumb"><img src="data:image/jpeg;base64,{thumb_b64}" alt="{display_name}"/></div>', unsafe_allow_html=True)
+                                        else:
+                                            st.markdown('<div class="card-thumb">PDF PREVIEW</div>', unsafe_allow_html=True)
+
+                                        st.markdown(f'<div class="card-name" title="{name}">{display_name}</div>', unsafe_allow_html=True)
+                                        st.markdown(f'<div class="card-pages">{pages}</div>', unsafe_allow_html=True)
+                                        st.markdown('</div>', unsafe_allow_html=True)
+                                    except Exception:
+                                        pass
+
+                                # If this is the slot immediately after the last card, render add-slot here
+                                elif i == n:
+                                    # Render any insert_preview targeted at the end
+                                    if insert_preview and insert_preview.get('pos') == n:
+                                        for j, (pth, pname) in enumerate(zip(insert_preview.get('thumbs', []), insert_preview.get('names', []))):
+                                            try:
+                                                st.markdown('<div class="card-wrapper">', unsafe_allow_html=True)
+                                                if pth:
+                                                    if isinstance(pth, str) and pth.startswith('PHN2'):
+                                                        st.markdown(f'<div class="card-thumb"><img src="data:image/svg+xml;base64,{pth}"/></div>', unsafe_allow_html=True)
+                                                    else:
+                                                        st.markdown(f'<div class="card-thumb"><img src="data:image/jpeg;base64,{pth}"/></div>', unsafe_allow_html=True)
+                                                else:
+                                                    st.markdown('<div class="card-thumb">PDF PREVIEW</div>', unsafe_allow_html=True)
+                                                st.markdown(f'<div class="card-name" title="{pname}">{pname}</div>', unsafe_allow_html=True)
+                                                st.markdown('</div>', unsafe_allow_html=True)
+                                            except Exception:
+                                                pass
+
+                                    # Add the large add-slot button
+                                    add_slot_html = '''
+                                    <button id="large_add_slot" style="width:210px;height:300px;border-radius:12px;border:2px dashed #3B82F6;background:#eef6ff;display:flex;align-items:center;justify-content:center;color:#3B82F6;font-weight:600;text-align:center;padding:16px;margin-top:8px;">
+                                        <div style="text-align:center;">
+                                            <div style="width:40px;height:40px;border-radius:20px;border:2px solid #cfe3ff;display:inline-flex;align-items:center;justify-content:center;margin-bottom:12px;background:white;color:#3B82F6;font-size:24px">＋</div>
+                                            <div style="color:#1064FF;font-weight:700;margin-top:6px">Add PDF,<br/>image, Word,<br/>Excel, and<br/><strong>PowerPoint</strong><br/>files</div>
+                                        </div>
+                                    </button>
+                                    '''
+                                    st.markdown(add_slot_html, unsafe_allow_html=True)
+
+                                    # JS bridge to trigger the Streamlit file input reliably.
+                                    # Prefer clicking visible file inputs; if none, click the (possibly hidden) "Add files" button.
+                                    bind_js = '''
+                                    <script>
+                                    (function(){
+                                        try {
+                                            const attach = () => {
+                                                try {
+                                                    const slot = window.parent.document.getElementById('large_add_slot');
+                                                    if (!slot) return false;
+                                                    slot.style.cursor = 'pointer';
+
+                                                    const isVisible = (el) => {
+                                                        try {
+                                                            const s = window.parent.getComputedStyle(el);
+                                                            if (!s) return false;
+                                                            if (s.display === 'none' || s.visibility === 'hidden') return false;
+                                                            return true;
+                                                        } catch(e) { return false; }
+                                                    };
+
+                                                    const findVisibleFileInput = () => {
+                                                        const inputs = Array.from(window.parent.document.querySelectorAll('input[type=file]'));
+                                                        for (let inp of inputs.reverse()) {
+                                                            try { if (isVisible(inp)) return inp; } catch(e) {}
+                                                        }
+                                                        return null;
+                                                    };
+
+                                                    const findAddButton = () => {
+                                                        const buttons = Array.from(window.parent.document.querySelectorAll('button'));
+                                                        for (let b of buttons) {
+                                                            try {
+                                                                const txt = (b.innerText || '').trim().toLowerCase();
+                                                                if (txt === 'add files' || txt.indexOf('add files') !== -1) return b;
+                                                            } catch(e) { }
+                                                        }
+                                                        return null;
+                                                    };
+
+                                                    const hideButtonVisually = (btn) => {
+                                                        try {
+                                                            // Move off-screen but keep it in the DOM so .click() works
+                                                            btn.style.position = 'absolute';
+                                                            btn.style.left = '-9999px';
+                                                            btn.style.top = '0';
+                                                            btn.style.opacity = '0';
+                                                            btn.style.zIndex = '0';
+                                                        } catch(e) {}
+                                                    };
+
+                                                    const clickTarget = () => {
+                                                        // Try visible file input first
+                                                        const inp = findVisibleFileInput();
+                                                        if (inp) {
+                                                            try { inp.click(); return true; } catch(e) {}
+                                                        }
+                                                        // Fallback: click Add files button (may be hidden visually but still clickable)
+                                                        const btn = findAddButton();
+                                                        if (btn) {
+                                                            try { hideButtonVisually(btn); btn.click(); return true; } catch(e) {}
+                                                        }
+                                                        return false;
+                                                    };
+
+                                                    slot.addEventListener('click', function(e){ e.preventDefault(); try { clickTarget(); } catch(err){} });
+                                                    return true;
+                                                } catch(err){ return false; }
+                                            };
+                                            if (!attach()){
+                                                let attempts = 0;
+                                                const intr = setInterval(()=>{ attempts+=1; if (attach()||attempts>12) clearInterval(intr); },250);
+                                            }
+                                        } catch(e){}
+                                    })();
+                                    </script>
+                                    '''
+                                    components.html(bind_js, height=0)
+
+                                    # if st.button('Add files', key='add_slot_append'):
+                                    #     st.session_state.insert_position = n
+                                    #     st.session_state.insert_uploader_key = st.session_state.get('insert_uploader_key', 0) + 1
+                                    #     st.session_state.open_insert_uploader = True
+                                    #     st.rerun()
+                                else:
+                                    # Empty placeholder
+                                    st.write('')
+
+                    # Clear last_insert_preview so it only appears once
+                    if insert_preview:
+                        st.session_state.pop('last_insert_preview', None)
+
+                    # Close horizontal scroll wrapper
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                    # Duplicate end-slot removed — the add-slot is rendered inline above (row-by-row).
+
                 
                 else:
                     # PAGES VIEW (New Implementation)
@@ -1216,38 +1417,171 @@ def render_stage_2_upload(navigator: StageNavigator, config: Dict):
 
                 if st.session_state.get('insert_position') is not None:
                     pos = st.session_state.insert_position
-                    st.markdown(f"**Insert files at position {pos + 1}**")
-                    new_files = st.file_uploader("Select files to insert", accept_multiple_files=True, key="insert_files")
+                    # Create an insert uploader (auto-opened when triggered)
+                    # Use a dynamic key so a fresh uploader is rendered each time the user clicks a plus
+                    insert_key = st.session_state.get('insert_uploader_key', 0)
+                    new_files = st.file_uploader("Select files to insert", accept_multiple_files=True, key=f"insert_files_{insert_key}")
+                    # If requested, auto-click the newly rendered file input to open OS file dialog
+                    if st.session_state.get('open_insert_uploader'):
+                        js = """
+                        <script>
+                        (function(){
+                            try {
+                                // Find all file inputs in parent document and click the last one
+                                const inputs = window.parent.document.querySelectorAll('input[type=file]');
+                                if (inputs && inputs.length) {
+                                    const el = inputs[inputs.length - 1];
+                                    el.click();
+                                }
+                            } catch (e) { console.error('auto-open upload failed', e); }
+                        })();
+                        </script>
+                        """
+                        components.html(js, height=0)
+                        st.session_state.open_insert_uploader = False
                     if new_files:
-                        uploaded = st.session_state.get('uploaded_files', [])
-                        meta = st.session_state.get('uploaded_meta', [])
-                        insert_at = pos
+                        uploaded = list(st.session_state.get('uploaded_files', []))
+                        meta = list(st.session_state.get('uploaded_meta', []))
+                        insert_at = int(pos)
+
+                        # Build lists for the new files (make stable in-memory copies)
+                        inserted_files = []
+                        inserted_meta = []
+                        insert_thumbs = []
+                        insert_names = []
+
                         for af in new_files:
-                            uploaded.insert(insert_at, af)
-                            pages = ''
-                            thumb_b64 = None
                             try:
-                                from PyPDF2 import PdfReader
-                                af.seek(0)
-                                reader = PdfReader(af)
-                                pages = len(reader.pages)
-                                # Generate thumbnail
                                 af.seek(0)
                                 content = af.read()
-                                af.seek(0)
-                                try:
-                                    thumb_b64 = generate_thumbnail(pdf_bytes=content, page=0, size=(180, 240))
-                                except Exception:
-                                    thumb_b64 = None
-                                af.seek(0)
+                            except Exception:
+                                content = None
+
+                            # Create a stable in-memory copy so the object survives Streamlit lifecycle
+                            if content is not None:
+                                buf = io.BytesIO(content)
+                                buf.name = getattr(af, 'name', str(af))
+                                buf.size = len(content)
+                            else:
+                                buf = af
+
+                            # Generate thumbnail and page count
+                            thumb_b64 = None
+                            pages = ''
+                            try:
+                                from PyPDF2 import PdfReader
+                                if content is not None:
+                                    reader = PdfReader(io.BytesIO(content))
+                                else:
+                                    af.seek(0)
+                                    reader = PdfReader(af)
+                                pages = len(reader.pages)
                             except Exception:
                                 pages = ''
-                            meta.insert(insert_at, {'name': getattr(af, 'name', str(af)), 'rotation': 0, 'pages': pages, 'thumb': thumb_b64})
-                            insert_at += 1
-                        st.session_state.uploaded_files = uploaded
-                        st.session_state.uploaded_meta = meta
+
+                            try:
+                                # Respect rotation when generating thumbnail (swap size for 90/270)
+                                rot_for_thumb = 0
+                                try:
+                                    rot_for_thumb = int(getattr(af, 'rotation', 0) or 0)
+                                except Exception:
+                                    rot_for_thumb = 0
+                                thumb_size = (180, 240) if rot_for_thumb % 180 == 0 else (240, 180)
+                                if content is not None:
+                                    thumb_b64 = generate_thumbnail(pdf_bytes=content, page=0, size=thumb_size, rotation=rot_for_thumb)
+                                else:
+                                    af.seek(0)
+                                    thumb_b64 = generate_thumbnail(pdf_bytes=af.read(), page=0, size=thumb_size, rotation=rot_for_thumb)
+                                    af.seek(0)
+                            except Exception:
+                                thumb_b64 = None
+
+                            inserted_files.append(buf)
+                            nm = getattr(af, 'name', str(af))
+                            inserted_meta.append({'name': nm, 'rotation': 0, 'pages': pages, 'thumb': thumb_b64})
+                            insert_thumbs.append(thumb_b64)
+                            insert_names.append(nm)
+
+                            # Do not dedupe: keep existing uploaded files as distinct entries.
+                            cleaned_uploaded = list(uploaded)
+                            cleaned_meta = list(meta)
+
+                        # If an anchor was stored when the user clicked the plus,
+                        # try to locate that anchor in the cleaned list so we insert
+                        # at the correct position even if dedupe/reordering occurred.
+                        anchor = st.session_state.get('insert_anchor')
+                        anchor_index = st.session_state.get('insert_anchor_index')
+                        if anchor is not None:
+                            # Find first index in cleaned_uploaded matching the anchor key
+                            # The UI places the circular "+" button after the card, so
+                            # the new file(s) should appear after the clicked card.
+                            found_idx = None
+                            for idx_existing, f_obj in enumerate(cleaned_uploaded):
+                                try:
+                                    k_name = getattr(f_obj, 'name', None)
+                                    k_size = getattr(f_obj, 'size', None)
+                                    if (k_name, k_size) == anchor:
+                                        found_idx = idx_existing
+                                        break
+                                except Exception:
+                                    continue
+                            if found_idx is not None:
+                                # Insert after the matched index so the original item shifts right
+                                insert_at = found_idx + 1
+                            else:
+                                # Fallback to numeric anchor index (+1) so we insert after that slot
+                                if anchor_index is not None:
+                                    insert_at = max(0, min(len(cleaned_uploaded), int(anchor_index) + 1))
+                                else:
+                                    insert_at = max(0, min(len(cleaned_uploaded), insert_at))
+                        else:
+                            # Clamp insert_at to cleaned list length
+                            insert_at = max(0, min(len(cleaned_uploaded), insert_at))
+
+                        # Clear anchor and anchor_index after use
+                        if 'insert_anchor' in st.session_state:
+                            st.session_state.pop('insert_anchor', None)
+                        if 'insert_anchor_index' in st.session_state:
+                            st.session_state.pop('insert_anchor_index', None)
+
+                        # Rebuild lists using slicing so positions are deterministic
+                        new_uploaded = cleaned_uploaded[:insert_at] + inserted_files + cleaned_uploaded[insert_at:]
+                        new_meta = cleaned_meta[:insert_at] + inserted_meta + cleaned_meta[insert_at:]
+
+                        st.session_state.uploaded_files = new_uploaded
+                        st.session_state.uploaded_meta = new_meta
+
+                        # Clear preview/selection state so UI keys remap cleanly after insertion
+                        if 'preview_file_index' in st.session_state:
+                            st.session_state.pop('preview_file_index', None)
+                        if 'selected_upload_index' in st.session_state:
+                            st.session_state.pop('selected_upload_index', None)
+
+                        # Close the insert uploader and clear the insert_position
                         st.session_state.pop('insert_position', None)
-                        st.experimental_rerun()
+                        st.session_state.open_insert_uploader = False
+
+                        # To avoid Streamlit widget key collisions and transient UI duplication
+                        # clear per-card dynamic keys so widget mapping remaps cleanly on rerun.
+                        dynamic_prefixes = (
+                            'preview_', 'move_mode_', 'view_card_', 'dup_card_', 'del_card_',
+                            'insert_here_', 'insert_files_', 'list_del_', 'insert_uploader_key'
+                        )
+                        keys_to_clear = [k for k in list(st.session_state.keys()) if any(k.startswith(p) for p in dynamic_prefixes)]
+                        for k in keys_to_clear:
+                            try:
+                                st.session_state.pop(k, None)
+                            except Exception:
+                                pass
+
+                        # Select the first of the newly inserted files so the UI focuses it
+                        try:
+                            st.session_state.selected_upload_index = int(insert_at)
+                        except Exception:
+                            st.session_state.selected_upload_index = None
+
+                        # Persist changes and rerun to render stable state
+                        st.rerun()
 
         elif upload_method == "ZIP Archive":
             zip_file = st.file_uploader("Select ZIP file", type=["zip"])
