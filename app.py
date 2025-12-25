@@ -778,7 +778,7 @@ def render_stage_2_upload(navigator: StageNavigator, config: Dict):
                 </style>
                 """, unsafe_allow_html=True)
 
-                col_tb_1, col_tb_2, col_tb_3, col_tb_4, col_tb_5, col_tb_6, col_tb_7 = st.columns([0.15, 0.07, 0.03, 0.03, 0.03, 0.41, 0.2])
+                col_tb_1, col_tb_2, col_tb_3, col_tb_4, col_tb_5, col_tb_6, col_tb_7 = st.columns([0.15, 0.07, 0.03, 0.03, 0.03, 0.1, 0.2])
                 
                 with col_tb_1:
                     # View Toggle
@@ -1160,7 +1160,7 @@ def render_stage_2_upload(navigator: StageNavigator, config: Dict):
                                             if st.button('🗑', key=f'del_card_{i}', help='Delete'):
                                                 delete_file(i)
                                         with action_cols[4]:
-                                            if st.button('＋',key=f'insert_here_{i}', help='Insert files here'):
+                                            if st.button('＋', key=f'insert_here_{i}', help='Insert files here'):
                                                 st.session_state.insert_position = i + 1
                                                 try:
                                                     uploaded_files_tmp = st.session_state.get('uploaded_files', [])
