@@ -1031,8 +1031,7 @@ def render_stage_2_upload(navigator: StageNavigator, config: Dict):
 
 
                     # Render a Streamlit-native card grid using columns so action buttons are server-side
-                    cols_per_row = 6
-                    cols_cards = [st.columns(cols_per_row) for _ in range(1)][0]
+
 
                     # Inject small card CSS (scoped visually) once
                     card_styles = """
@@ -1056,6 +1055,7 @@ def render_stage_2_upload(navigator: StageNavigator, config: Dict):
                     .card-thumb .img-frame { position:absolute; left:0; top:0; right:0; bottom:0; display:flex; align-items:center; justify-content:center; z-index:2; overflow:hidden; background:#fff; border:1px solid #eef2f7 }
                     .card-thumb img { max-width:100%; max-height:100%; object-fit:contain; z-index: 5; margin-left: -20px; }
                     .st-emotion-cache-1j4it34 { flex:none; }
+                    div[data-testid="stColumn"] { width:auto; flex: none; }
                     .st-emotion-cache-ai037n { margin-bottom: 12px; }
                     /* Name and pages centered below thumbnail */
                     .card-name { color:#6b7280; font-size:12px; text-align:center; background: rgba(47,134,255,0.12); color:#0b5cff; padding:6px 12px; border-radius:12px; font-weight:600; position: absolute; top: 10px; left: 25px; width: 170px; }
@@ -1078,6 +1078,7 @@ def render_stage_2_upload(navigator: StageNavigator, config: Dict):
                     # Render cards row-by-row and always include one extra slot
                     # for the "Add" card so it's visible even when rows are full.
                     total_items = n + 1  # n cards + 1 add-slot
+                    cols_per_row = total_items
                     rows = (total_items + cols_per_row - 1) // cols_per_row if total_items > 0 else 1
                     rendered_count = 0
                     for r in range(rows):
@@ -1159,7 +1160,7 @@ def render_stage_2_upload(navigator: StageNavigator, config: Dict):
                                             if st.button('🗑', key=f'del_card_{i}', help='Delete'):
                                                 delete_file(i)
                                         with action_cols[4]:
-                                            if st.button('＋', key=f'insert_here_{i}', help='Insert files here'):
+                                            if st.button('＋',key=f'insert_here_{i}', help='Insert files here'):
                                                 st.session_state.insert_position = i + 1
                                                 try:
                                                     uploaded_files_tmp = st.session_state.get('uploaded_files', [])
@@ -1865,8 +1866,6 @@ def render_stage_5_generate(navigator: StageNavigator, config: Dict):
     # Don't show nav buttons while processing
     if not processor.is_running:
         navigator.render_navigation_buttons()
-    st.write("Processor status:", processor.state.status)
-    st.write("Processor error:", processor.state.error_message)
     
 
 def render_stage_6_complete(navigator: StageNavigator, config: Dict):
@@ -1905,7 +1904,6 @@ def render_stage_6_complete(navigator: StageNavigator, config: Dict):
     st.divider()
     # Download section
     col1, col2 = st.columns(2)
-    outlits = st.session_state.get('output_file')
 
     with col1:
         st.subheader("📥 Download")
