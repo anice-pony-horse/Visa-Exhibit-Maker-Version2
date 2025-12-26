@@ -277,10 +277,10 @@ def duplicate_file(idx):
         if 0 <= idx < len(meta):
             new_meta = dict(meta[idx])
             orig_name = new_meta.get('name') or getattr(src, 'name', None) or f'Document {idx+1}'
-            new_meta['name'] = f"{orig_name} (copy)"
+            new_meta['name'] = f"{orig_name}"
             new_meta['rotation'] = new_meta.get('rotation', 0)
         else:
-            new_meta = {'name': getattr(buf, 'name', f'Document {idx+1} (copy)'), 'rotation': 0, 'pages': '', 'thumb': None}
+            new_meta = {'name': getattr(buf, 'name', f'Document {idx+1}'), 'rotation': 0, 'pages': '', 'thumb': None}
 
         # Attempt to generate a thumbnail for the copy
         try:
@@ -778,7 +778,7 @@ def render_stage_2_upload(navigator: StageNavigator, config: Dict):
                 </style>
                 """, unsafe_allow_html=True)
 
-                col_tb_1, col_tb_2, col_tb_3, col_tb_4, col_tb_5, col_tb_6, col_tb_7 = st.columns([0.15, 0.07, 0.03, 0.03, 0.03, 0.1, 0.2])
+                col_tb_1, col_tb_2, col_tb_3, col_tb_4, col_tb_5, col_tb_6, col_tb_7 = st.columns([0.15, 0.07, 0.03, 0.03, 0.03, 0.41, 0.2])
                 
                 with col_tb_1:
                     # View Toggle
@@ -1054,19 +1054,34 @@ def render_stage_2_upload(navigator: StageNavigator, config: Dict):
                     .card-thumb { width:188px; height:245px; display:flex; margin-left:38px; border-radius:8px; position:relative; margin-top:-30px }
                     .card-thumb .img-frame { position:absolute; left:0; top:0; right:0; bottom:0; display:flex; align-items:center; justify-content:center; z-index:2; overflow:hidden; background:#fff; border:1px solid #eef2f7 }
                     .card-thumb img { max-width:100%; max-height:100%; object-fit:contain; z-index: 5; margin-left: -20px; }
+                    .st-emotion-cache-1permvm {
+                            justify-content: space-between;
+                    }
                     .st-emotion-cache-1j4it34 { flex:none; }
-                    div[data-testid="stColumn"] { width:auto; flex: none; }
+                    div[data-testid="stColumn"] { width:auto; flex: none; min-width: auto; }
                     .st-emotion-cache-ai037n { margin-bottom: 12px; }
                     /* Name and pages centered below thumbnail */
                     .card-name { color:#6b7280; font-size:12px; text-align:center; background: rgba(47,134,255,0.12); color:#0b5cff; padding:6px 12px; border-radius:12px; font-weight:600; position: absolute; top: 10px; left: 25px; width: 170px; }
-                    .card-pages { font-weight:400; color:#a3a3a3; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:center; position:absolute; left:25%; top:25px; }
-
+                    .card-pages { font-weight:400; color:#a3a3a3; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:center; position:absolute; left:28%; top:25px; }
                     /* Ensure action row buttons inside Streamlit columns are compact */
                     .stButton>button { padding:6px 8px }
                     @media (max-width:900px) {
                         .card-wrapper { min-height:300px }
-                        .card-thumb { width:150px; height:200px }
+                        .st-emotion-cache-1permvm {
+                            justify-content: space-between;
+                        }
                     }
+                    @media (max-width:700px) {
+                        .st-emotion-cache-1permvm {
+                            justify-content: center;
+                        }
+                    }
+                    @media (max-width:600px) {
+                        .st-emotion-cache-1permvm {
+                            justify-content: center;
+                        }
+                    }
+                    
                     </style>
                     """
                     st.markdown(card_styles, unsafe_allow_html=True)
@@ -1225,6 +1240,19 @@ def render_stage_2_upload(navigator: StageNavigator, config: Dict):
                                     </button>
                                     '''
                                     st.markdown(add_slot_html, unsafe_allow_html=True)
+
+                                    add_slot_css = '''
+                                    <style>
+                                    @media (max-width: 900px) {
+                                        #add_slot {
+                                            width: 14.5rem !important;
+                                            justify-content: center;
+                                            margin: auto;
+                                        }
+                                    }
+                                    </style>
+                                    '''
+                                    st.markdown(add_slot_css, unsafe_allow_html=True)
 
                                     # JS bridge to trigger the Streamlit file input reliably.
                                     # Prefer clicking visible file inputs; if none, click the (possibly hidden) "Add files" button.
