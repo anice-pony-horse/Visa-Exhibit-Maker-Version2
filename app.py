@@ -1065,7 +1065,7 @@ def render_stage_2_upload(navigator: StageNavigator, config: Dict):
                     .card-pages { font-weight:400; color:#a3a3a3; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:center; position:absolute; left:28%; top:25px; }
                     /* Ensure action row buttons inside Streamlit columns are compact */
                     .stButton>button { padding:6px 8px }
-                    @media (max-width:900px) {
+                    @media (max-width:900px) { 
                         .card-wrapper { min-height:300px }
                         .st-emotion-cache-1permvm {
                             justify-content: space-between;
