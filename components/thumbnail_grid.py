@@ -518,9 +518,9 @@ def render_exhibit_preview(exhibit: Dict[str, Any], index: Optional[int] = None)
             else:
                 css_dims = 'max-width:840px; height:620px;'
             if large_thumb.startswith('PHN2'):
-                st.markdown(f'<div style="text-align:center"><img src="data:image/svg+xml;base64,{large_thumb}" style="{css_dims} border:1px solid #eee; border-radius:6px"/></div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="text-align:center"><img src="data:image/svg+xml;base64,{large_thumb}" class="show_file" style="{css_dims}" /></div>', unsafe_allow_html=True)
             else:
-                st.markdown(f'<div style="text-align:center"><img src="data:image/jpeg;base64,{large_thumb}" style="{css_dims} border:1px solid #eee; border-radius:6px"/></div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="text-align:center"><img src="data:image/jpeg;base64,{large_thumb}" class="show_file" style="{css_dims}" /></div>', unsafe_allow_html=True)
         else:
             # Fallback to iframe embedding of full PDF
             try:
@@ -536,6 +536,27 @@ def render_exhibit_preview(exhibit: Dict[str, Any], index: Optional[int] = None)
             except Exception:
                 st.info('Unable to render preview for this PDF.')
         st.markdown('<div style="text-align:center;">', unsafe_allow_html=True)
+
+        styles = """
+            <style>        
+            .show_file {
+                border:1px solid #eee;
+                border-radius:6px;
+            }
+
+            @media (max-width: 700px) {
+                .show_file {
+                    width: 90vw;
+                    height: 110vw !important;
+                }
+            }
+            .st-emotion-cache-1permvmP{
+                display: flow !important; 
+            }
+            </style>
+        """
+        st.markdown(styles, unsafe_allow_html=True)
+
         # Controls: center the button group beneath the preview
         outer = st.columns([2, 2, 2])
         with outer[1]:
